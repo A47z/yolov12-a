@@ -65,6 +65,14 @@ from ultralytics.nn.modules import (
     WorldDetect,
     v10Detect,
     A2C2f,
+    FCM_3,  # <--- 添加您的自定义模块
+    FCM_2,  # <--- 添加您的自定义模块
+    FCM_1,  # <--- 添加您的自定义模块
+    FCM,  # <--- 添加您的自定义模块
+    Pzconv,  # <--- 添加您的自定义模块
+    Down,  # <--- 添加您的自定义模块
+    # 确保您的YAML中用到的其他非 torch.nn 的模块，如 C2f, SPPF 等也在这里被导入
+    # 通常 C2f, SPPF 应该已经是这个列表的一部分了
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, DEFAULT_CFG_KEYS, LOGGER, colorstr, emojis, yaml_load
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -997,6 +1005,12 @@ def parse_model(d, ch, verbose=True):  # model_dict, input_channels(3)
             SCDown,
             C2fCIB,
             A2C2f,
+            FCM_3,
+            FCM_2,
+            FCM_1,
+            FCM,
+            Pzconv,
+            Down,
         }:
             c1, c2 = ch[f], args[0]
             if c2 != nc:  # if c2 not equal to number of classes (i.e. for Classify() output)

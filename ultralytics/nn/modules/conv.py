@@ -6,6 +6,11 @@ import math
 import numpy as np
 import torch
 import torch.nn as nn
+# Added from conv.py if any unique imports were needed, but current ones suffice.
+# from typing import Tuple # Not strictly needed for the merged parts from conv.py
+# from torch import Tensor # Not strictly needed for the merged parts from conv.py
+# from einops import rearrange # Not used by added modules
+# import torch.nn.functional as F # Not used by added modules
 
 __all__ = (
     "Conv",
@@ -22,6 +27,12 @@ __all__ = (
     "Concat",
     "RepConv",
     "Index",
+    "FCM",
+    "Pzconv",
+    "FCM_3",
+    "FCM_2",
+    "FCM_1",
+    "Down",
 )
 
 
@@ -216,7 +227,7 @@ class RepConv(nn.Module):
         if kernel1x1 is None:
             return 0
         else:
-            return torch.nn.functional.pad(kernel1x1, [1, 1, 1, 1])
+            return torch.nn.functional.pad(kernel1x1, [1, 1, 1, 1]) # Requires torch.nn.functional as F
 
     def _fuse_bn_tensor(self, branch):
         """Generates appropriate kernels and biases for convolution by fusing branches of the neural network."""
@@ -267,7 +278,7 @@ class RepConv(nn.Module):
             para.detach_()
         self.__delattr__("conv1")
         self.__delattr__("conv2")
-        if hasattr(self, "nm"):
+        if hasattr(self, "nm"): # 'nm' was in conv.py's RepConv but not conv2.py's.
             self.__delattr__("nm")
         if hasattr(self, "bn"):
             self.__delattr__("bn")
@@ -336,7 +347,7 @@ class Concat(nn.Module):
 class Index(nn.Module):
     """Returns a particular index of the input."""
 
-    def __init__(self, c1, c2, index=0):
+    def __init__(self, c1, c2, index=0): # c1, c2 arguments seem unused based on original conv2.py
         """Returns a particular index of the input."""
         super().__init__()
         self.index = index
@@ -347,4 +358,181 @@ class Index(nn.Module):
 
         Expects a list of tensors as input.
         """
+        if not isinstance(x, list):
+            # Handle cases where x might not be a list, or provide a warning/error
+            # For now, assuming it's intended to work on lists as per common use with Concat
+            # Or if it's from a single tensor output that's a tuple (e.g. from some custom layers)
+            # This behavior might need clarification based on usage in the model
+             pass # No operation if not a list, or could raise error.
         return x[self.index]
+
+
+# === Modules copied from conv.py ===
+
+class Channel(nn.Module): # Helper class for FCM modules
+    def __init__(self, dim):
+        super().__init__()
+        self.dwconv = nn.Conv2d( # Corrected: self.dconv was used but not defined in original snippet from conv.py
+            dim, dim, 3,
+            1, 1, groups=dim
+        )
+        self.Apt = nn.AdaptiveAvgPool2d(1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x2 = self.dwconv(x)
+        x5 = self.Apt(x2)
+        x6 = self.sigmoid(x5)
+        return x6
+
+
+class Spatial(nn.Module): # Helper class for FCM modules
+    def __init__(self, dim):
+        super().__init__()
+        self.conv1 = nn.Conv2d(dim, 1, 1, 1)
+        self.bn = nn.BatchNorm2d(1)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x5 = self.bn(x1)
+        x6 = self.sigmoid(x5)
+        return x6
+
+
+class FCM_3(nn.Module):
+    def __init__(self, dim,dim_out): # dim_out seems unused in the forward pass
+        super().__init__()
+        self.one = dim - dim // 4
+        self.two = dim // 4
+        # Ensuring Conv class from this file is used
+        self.conv1 = Conv(dim - dim // 4, dim - dim // 4, 3, 1, p=1) # autopad will handle padding for k=3, p=1
+        self.conv12 = Conv(dim - dim // 4, dim - dim // 4, 3, 1, p=1)
+        self.conv123 = Conv(dim - dim // 4, dim, 1, 1) # k=1, s=1
+        self.conv2 = Conv(dim // 4, dim, 1, 1) # k=1, s=1
+        self.spatial = Spatial(dim)
+        self.channel = Channel(dim)
+
+    def forward(self, x):
+        x1, x2 = torch.split(x, [self.one, self.two], dim=1)
+        x3 = self.conv1(x1)
+        x3 = self.conv12(x3)
+        x3 = self.conv123(x3)
+        x4 = self.conv2(x2)
+        x33 = self.spatial(x4) * x3
+        x44 = self.channel(x3) * x4
+        x5 = x33 + x44
+        return x5
+
+
+class FCM_2(nn.Module):
+    def __init__(self, dim,dim_out): # dim_out seems unused
+        super().__init__()
+        self.one = dim - dim // 4
+        self.two = dim // 4
+        self.conv1 = Conv(dim - dim // 4, dim - dim // 4, 3, 1, p=1)
+        self.conv12 = Conv(dim - dim // 4, dim - dim // 4, 3, 1, p=1)
+        self.conv123 = Conv(dim - dim // 4, dim, 1, 1)
+        self.conv2 = Conv(dim // 4, dim, 1, 1)
+        self.spatial = Spatial(dim)
+        self.channel = Channel(dim)
+
+    def forward(self, x):
+        x1, x2 = torch.split(x, [self.one, self.two], dim=1)
+        x3 = self.conv1(x1)
+        x3 = self.conv12(x3)
+        x3 = self.conv123(x3)
+        x4 = self.conv2(x2)
+        x33 = self.spatial(x4) * x3
+        x44 = self.channel(x3) * x4
+        x5 = x33 + x44
+        return x5
+
+
+class FCM_1(nn.Module):
+    def __init__(self, dim,dim_out): # dim_out seems unused
+        super().__init__()
+        self.one = dim // 4
+        self.two = dim - dim // 4
+        self.conv1 = Conv(dim // 4, dim // 4, 3, 1, p=1)
+        self.conv12 = Conv(dim // 4, dim // 4, 3, 1, p=1)
+        self.conv123 = Conv(dim // 4, dim, 1, 1)
+        self.conv2 = Conv(dim - dim // 4, dim, 1, 1)
+        self.spatial = Spatial(dim)
+        self.channel = Channel(dim)
+
+    def forward(self, x):
+        x1, x2 = torch.split(x, [self.one, self.two], dim=1)
+        x3 = self.conv1(x1)
+        x3 = self.conv12(x3)
+        x3 = self.conv123(x3)
+        x4 = self.conv2(x2)
+        x33 = self.spatial(x4) * x3
+        x44 = self.channel(x3) * x4
+        x5 = x33 + x44
+        return x5
+
+
+class FCM(nn.Module):
+    def __init__(self, dim,dim_out): # dim_out seems unused
+        super().__init__()
+        self.one = dim // 4
+        self.two = dim - dim // 4
+        self.conv1 = Conv(dim // 4, dim // 4, 3, 1, p=1)
+        self.conv12 = Conv(dim // 4, dim // 4, 3, 1, p=1)
+        self.conv123 = Conv(dim // 4, dim, 1, 1)
+        self.conv2 = Conv(dim - dim // 4, dim, 1, 1)
+        self.conv3 = Conv(dim, dim, 1, 1) # In original conv.py, it's Conv(dim, dim, 1, 1). Assuming it uses the same Conv.
+                                        # If dim_out was intended for this conv3, it should be Conv(dim, dim_out, 1, 1)
+        self.spatial = Spatial(dim)
+        self.channel = Channel(dim)
+
+    def forward(self, x):
+        x1, x2 = torch.split(x, [self.one, self.two], dim=1)
+        x3 = self.conv1(x1)
+        x3 = self.conv12(x3)
+        x3 = self.conv123(x3)
+        x4 = self.conv2(x2)
+        x33 = self.spatial(x4) * x3
+        x44 = self.channel(x3) * x4
+        x5 = x33 + x44
+        x5 = self.conv3(x5)
+        return x5
+
+
+class Pzconv(nn.Module):
+    def __init__(self, dim, k=1, s=1, p=None, g=1, d=1, act=True): # Standard Conv args, but some are unused
+        super().__init__()
+        # Original Pzconv uses raw nn.Conv2d and local Conv. Adapting to use this file's Conv.
+        # Padding (p) needs to be specified for nn.Conv2d if not using autopad.
+        # For k=3, p=1; k=5, p=2; k=7, p=3 for 'same' padding.
+        self.conv1 = nn.Conv2d(dim, dim, kernel_size=3, stride=1, padding=1, groups=dim)
+        self.conv2 = Conv(dim, dim, k=1, s=1) # Uses this file's Conv
+        self.conv3 = nn.Conv2d(dim, dim, kernel_size=5, stride=1, padding=2, groups=dim)
+        self.conv4 = Conv(dim, dim, k=1, s=1) # Uses this file's Conv
+        self.conv5 = nn.Conv2d(dim, dim, kernel_size=7, stride=1, padding=3, groups=dim)
+
+    def forward(self, x):
+        x1 = self.conv1(x)
+        x2 = self.conv2(x1)
+        x3 = self.conv3(x2)
+        x4 = self.conv4(x3)
+        x5 = self.conv5(x4)
+        x6 = x5 + x
+        return x6
+
+
+class Down(nn.Module):
+    def __init__(self, dim, dim_out):
+        super().__init__()
+        # Original used g=dim//2 in a Conv for conv2.
+        # Conv(c1, c2, k, s, p, g, d, act)
+        # Assuming the groups should be applied to the depthwise-like part.
+        # If Conv with groups is meant to be a grouped conv, not depthwise:
+        self.conv2 = Conv(dim, dim, k=3, s=2, p=1, g=dim // 2, act=False) # k=3, s=2, p needs to be calculated or set for autopad
+        self.conv4 = Conv(dim, dim_out, k=1, s=1) # k=1, s=1
+
+    def forward(self, x):
+        x2 = self.conv2(x)
+        x2 = self.conv4(x2)
+        return x2
