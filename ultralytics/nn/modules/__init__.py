@@ -162,4 +162,12 @@ __all__ = (
     "TorchVision",
     "Index",
     "A2C2f"
+    "FCM_3",
+    "FCM_2",
+    "FCM_1",
+    "FCM",
+    "Pzconv",
+    "Down",
 )
+from .conv import FCM_3, FCM_2, FCM_1, FCM, Pzconv, Down # 根据需要添加其他自定义模块
+from .block import C2f, SPPF
